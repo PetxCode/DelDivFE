@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Pin, ViewTab, AuthUser } from "./types";
 import { apiUrl } from "./api";
-import { INITIAL_PINS, INITIAL_CATEGORIES } from "./data/initialData";
+import { INITIAL_CATEGORIES } from "./data/initialData";
 import { Navbar } from "./components/Navbar";
 import { MasonryGrid } from "./components/MasonryGrid";
 import { PinModal } from "./components/PinModal";
@@ -33,11 +33,8 @@ import { VisualSearchModal } from "./components/VisualSearchModal";
 import { FavouritesView } from "./components/FavouritesView";
 
 export default function App() {
-  // Pins state initialized from localStorage, then synced with MongoDB Atlas
-  const [pins, setPins] = useState<Pin[]>(() => {
-    const saved = localStorage.getItem("pinspire_pins_v4");
-    return saved ? JSON.parse(saved) : INITIAL_PINS;
-  });
+  const [pins, setPins] = useState<Pin[]>([]);
+  const [hasLoadedPins, setHasLoadedPins] = useState(false);
 
   // Admin Auth state
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -74,10 +71,12 @@ export default function App() {
 
   const [deleteConfirmPin, setDeleteConfirmPin] = useState<Pin | null>(null);
 
-  // Sync to local storage for instant offline loading
+  // Keep the local cache for favourite flags, but never render cached pin records.
   useEffect(() => {
-    localStorage.setItem("pinspire_pins_v4", JSON.stringify(pins));
-  }, [pins]);
+    if (hasLoadedPins) {
+      localStorage.setItem("pinspire_pins_v4", JSON.stringify(pins));
+    }
+  }, [hasLoadedPins, pins]);
 
   // Toast trigger helper
   const showToast = (title: string, message: string) => {
@@ -96,17 +95,29 @@ export default function App() {
         if (res.ok) {
           const mongoPins = await res.json();
           if (Array.isArray(mongoPins)) {
-            // Preserve user's local favourite flags
-            setPins((prev) => {
-              const favMap = new Set(
-                prev.filter((p) => p.isFavourite).map((p) => p.id),
+            let cachedPins: Pin[] = [];
+            try {
+              const savedPins = JSON.parse(
+                localStorage.getItem("pinspire_pins_v4") || "[]",
               );
-              return mongoPins.map((mp: Pin) => ({
-                ...mp,
-                id: mp.id || (mp as any)._id,
-                isFavourite: favMap.has(mp.id || (mp as any)._id),
-              }));
-            });
+              cachedPins = Array.isArray(savedPins) ? savedPins : [];
+            } catch (err) {
+              console.warn("Could not read cached favourite flags:", err);
+            }
+            const favMap = new Set(
+              cachedPins.filter((pin) => pin.isFavourite).map((pin) => pin.id),
+            );
+            setPins(
+              mongoPins.map((mp: Pin) => {
+                const id = mp.id || mp._id || "";
+                return {
+                  ...mp,
+                  id,
+                  isFavourite: favMap.has(id),
+                };
+              }),
+            );
+            setHasLoadedPins(true);
           }
         }
       } catch (err) {
